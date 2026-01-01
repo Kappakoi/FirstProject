@@ -1,0 +1,273 @@
+diff --git a/.gitignore b/.gitignore
+new file mode 100644
+index 0000000..8bc9447
+--- /dev/null
++++ b/.gitignore
+@@ -0,0 +1,2 @@
++.build/
++.DS_Store
+diff --git a/Package.swift b/Package.swift
+new file mode 100644
+index 0000000..830c4c2
+--- /dev/null
++++ b/Package.swift
+@@ -0,0 +1,16 @@
++// swift-tools-version: 5.9
++import PackageDescription
++
++let package = Package(
++    name: "BattleSim",
++    platforms: [
++        .iOS(.v15)
++    ],
++    products: [
++        .library(name: "BattleSim", targets: ["BattleSim"])
++    ],
++    targets: [
++        .target(name: "BattleSim"),
++        .testTarget(name: "BattleSimTests", dependencies: ["BattleSim"])
++    ]
++)
+diff --git a/Sources/BattleSim/BattleEngine.swift b/Sources/BattleSim/BattleEngine.swift
+new file mode 100644
+index 0000000..581a266
+--- /dev/null
++++ b/Sources/BattleSim/BattleEngine.swift
+@@ -0,0 +1,42 @@
++import Foundation
++
++public final class BattleEngine {
++    public private(set) var heroes: [Hero]
++    public private(set) var enemies: [Enemy]
++    public private(set) var lastTickOrder: [String] = []
++
++    public init(heroes: [Hero], enemies: [Enemy]) {
++        self.heroes = heroes
++        self.enemies = enemies
++    }
++
++    public func tick() {
++        guard !isBattleOver else { return }
++        let combatants: [Combatant] = (heroes as [Combatant]) + (enemies as [Combatant])
++        let ordered = combatants
++            .filter { $0.isAlive }
++            .sorted { $0.stats.speed > $1.stats.speed }
++        lastTickOrder = ordered.map { $0.name }
++        for combatant in ordered {
++            guard !isBattleOver else { break }
++            combatant.takeTurn(in: self)
++        }
++    }
++
++    public var isBattleOver: Bool {
++        heroes.allSatisfy { !$0.isAlive } || enemies.allSatisfy { !$0.isAlive }
++    }
++
++    public func firstLivingHero() -> Hero? {
++        heroes.first(where: { $0.isAlive })
++    }
++
++    public func firstLivingEnemy() -> Enemy? {
++        enemies.first(where: { $0.isAlive })
++    }
++
++    public func applyAttack(from attacker: Combatant, to defender: Combatant) {
++        let damage = max(1, attacker.stats.attack - defender.stats.defense)
++        defender.stats.hp = max(0, defender.stats.hp - damage)
++    }
++}
+diff --git a/Sources/BattleSim/Entities.swift b/Sources/BattleSim/Entities.swift
+new file mode 100644
+index 0000000..e339efa
+--- /dev/null
++++ b/Sources/BattleSim/Entities.swift
+@@ -0,0 +1,63 @@
++import Foundation
++
++public struct CombatStats: Equatable {
++    public var hp: Int
++    public let attack: Int
++    public let defense: Int
++    public let speed: Int
++
++    public init(hp: Int, attack: Int, defense: Int, speed: Int) {
++        self.hp = hp
++        self.attack = attack
++        self.defense = defense
++        self.speed = speed
++    }
++}
++
++public protocol Combatant: AnyObject {
++    var name: String { get }
++    var stats: CombatStats { get set }
++    var isAlive: Bool { get }
++    func takeTurn(in engine: BattleEngine)
++}
++
++public extension Combatant {
++    var isAlive: Bool { stats.hp > 0 }
++}
++
++public final class Hero: Combatant {
++    public let name: String
++    public var stats: CombatStats
++
++    public init(name: String, stats: CombatStats) {
++        self.name = name
++        self.stats = stats
++    }
++
++    public func takeTurn(in engine: BattleEngine) {
++        guard let target = engine.firstLivingEnemy() else { return }
++        engine.applyAttack(from: self, to: target)
++    }
++}
++
++public final class Enemy: Combatant {
++    public enum Kind: String {
++        case goblin = "Goblin"
++        case skeleton = "Skeleton"
++    }
++
++    public let name: String
++    public let kind: Kind
++    public var stats: CombatStats
++
++    public init(kind: Kind, stats: CombatStats) {
++        self.kind = kind
++        self.name = kind.rawValue
++        self.stats = stats
++    }
++
++    public func takeTurn(in engine: BattleEngine) {
++        guard let target = engine.firstLivingHero() else { return }
++        engine.applyAttack(from: self, to: target)
++    }
++}
+diff --git a/Sources/BattleSim/GameLoop.swift b/Sources/BattleSim/GameLoop.swift
+new file mode 100644
+index 0000000..8f9b823
+--- /dev/null
++++ b/Sources/BattleSim/GameLoop.swift
+@@ -0,0 +1,35 @@
++import Foundation
++
++public final class GameLoop {
++    public typealias TickHandler = (_ tick: Int) -> Void
++
++    private let interval: TimeInterval
++    private let queue: DispatchQueue
++    private var timer: DispatchSourceTimer?
++    private var tickCount = 0
++    private let handler: TickHandler
++
++    public init(interval: TimeInterval = 1.0, queue: DispatchQueue = .global(), handler: @escaping TickHandler) {
++        self.interval = interval
++        self.queue = queue
++        self.handler = handler
++    }
++
++    public func start() {
++        guard timer == nil else { return }
++        let timer = DispatchSource.makeTimerSource(queue: queue)
++        timer.schedule(deadline: .now() + interval, repeating: interval)
++        timer.setEventHandler { [weak self] in
++            guard let self else { return }
++            self.tickCount += 1
++            self.handler(self.tickCount)
++        }
++        self.timer = timer
++        timer.resume()
++    }
++
++    public func stop() {
++        timer?.cancel()
++        timer = nil
++    }
++}
+diff --git a/Sources/BattleSim/HeadlessBattleRunner.swift b/Sources/BattleSim/HeadlessBattleRunner.swift
+new file mode 100644
+index 0000000..6d550ee
+--- /dev/null
++++ b/Sources/BattleSim/HeadlessBattleRunner.swift
+@@ -0,0 +1,21 @@
++import Foundation
++
++public final class HeadlessBattleRunner {
++    private let engine: BattleEngine
++    private let loop: GameLoop
++
++    public init(engine: BattleEngine, interval: TimeInterval = 1.0) {
++        self.engine = engine
++        self.loop = GameLoop(interval: interval) { [weak engine] _ in
++            engine?.tick()
++        }
++    }
++
++    public func start() {
++        loop.start()
++    }
++
++    public func stop() {
++        loop.stop()
++    }
++}
+diff --git a/Sources/BattleSim/Templates.swift b/Sources/BattleSim/Templates.swift
+new file mode 100644
+index 0000000..9c39289
+--- /dev/null
++++ b/Sources/BattleSim/Templates.swift
+@@ -0,0 +1,19 @@
++import Foundation
++
++public enum EnemyTemplates {
++    public static func goblin() -> Enemy {
++        Enemy(kind: .goblin, stats: CombatStats(hp: 12, attack: 6, defense: 2, speed: 8))
++    }
++
++    public static func skeleton() -> Enemy {
++        Enemy(kind: .skeleton, stats: CombatStats(hp: 16, attack: 5, defense: 3, speed: 5))
++    }
++}
++
++public enum HeroParty {
++    public static func defaultParty() -> [Hero] {
++        [
++            Hero(name: "Aria", stats: CombatStats(hp: 30, attack: 8, defense: 4, speed: 7))
++        ]
++    }
++}
+diff --git a/Tests/BattleSimTests/BattleEngineTests.swift b/Tests/BattleSimTests/BattleEngineTests.swift
+new file mode 100644
+index 0000000..8b0f323
+--- /dev/null
++++ b/Tests/BattleSimTests/BattleEngineTests.swift
+@@ -0,0 +1,27 @@
++import XCTest
++@testable import BattleSim
++
++final class BattleEngineTests: XCTestCase {
++    func testTickResolvesInSpeedOrder() {
++        let fastHero = Hero(name: "Swift", stats: CombatStats(hp: 10, attack: 5, defense: 1, speed: 9))
++        let slowEnemy = Enemy(kind: .goblin, stats: CombatStats(hp: 10, attack: 4, defense: 1, speed: 2))
++        let engine = BattleEngine(heroes: [fastHero], enemies: [slowEnemy])
++
++        engine.tick()
++
++        XCTAssertEqual(engine.lastTickOrder, ["Swift", "Goblin"])
++        XCTAssertLessThan(slowEnemy.stats.hp, 10)
++    }
++
++    func testBattleEndsWhenEnemiesDefeated() {
++        let hero = Hero(name: "Aria", stats: CombatStats(hp: 30, attack: 20, defense: 4, speed: 7))
++        let enemy = EnemyTemplates.goblin()
++        let engine = BattleEngine(heroes: [hero], enemies: [enemy])
++
++        while !engine.isBattleOver {
++            engine.tick()
++        }
++
++        XCTAssertTrue(enemy.stats.hp == 0)
++    }
++}
