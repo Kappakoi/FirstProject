@@ -1,0 +1,290 @@
+From 7a7973deef96f163208e656053b355622af5ed1c Mon Sep 17 00:00:00 2001
+From: Codex <codex@openai.com>
+Date: Thu, 1 Jan 2026 13:28:27 +0000
+Subject: [PATCH] Add SwiftUI battle and upgrades UI with `GameState` model
+
+### Motivation
+
+- Provide a simple fantasy-styled UI that displays hero/enemy HP, names, and a battle log while offering a separate upgrades screen to modify stats.
+- Bind the visible UI state to a single source of truth so interactions update the model reactively via `GameState`.
+
+### Description
+
+- Add a new `GameState` ObservableObject with published properties for names, HP, stats, `battleLog`, and methods `increaseAttack()` and `increaseDefense()`.
+- Add app entry `FirstProjectApp.swift` that injects `GameState` into the environment for child views.
+- Introduce `ContentView.swift` (RootView) containing `TabView` with `BattleView` and `UpgradesView`, plus `CharacterCard` and `UpgradeStatView` components that bind to `GameState` for HP, names, log, and upgrade actions.
+- Add `Colors.swift` with a lightweight fantasy color palette and update views to use the new color extensions (e.g. `.accentGold`, `.nightSky`, `.heroGreen`).
+
+### Testing
+
+- No automated tests were executed for these UI-only changes.
+---
+ Colors.swift          |  11 +++
+ ContentView.swift     | 185 ++++++++++++++++++++++++++++++++++++++++++
+ FirstProjectApp.swift |  13 +++
+ GameState.swift       |  24 ++++++
+ 4 files changed, 233 insertions(+)
+ create mode 100644 Colors.swift
+ create mode 100644 ContentView.swift
+ create mode 100644 FirstProjectApp.swift
+ create mode 100644 GameState.swift
+
+diff --git a/Colors.swift b/Colors.swift
+new file mode 100644
+index 0000000..24b1bc8
+--- /dev/null
++++ b/Colors.swift
+@@ -0,0 +1,11 @@
++import SwiftUI
++
++extension Color {
++    static let accentGold = Color(red: 0.93, green: 0.77, blue: 0.35)
++    static let nightSky = Color(red: 0.08, green: 0.09, blue: 0.16)
++    static let duskPurple = Color(red: 0.2, green: 0.14, blue: 0.32)
++    static let deepForest = Color(red: 0.08, green: 0.2, blue: 0.16)
++    static let heroGreen = Color(red: 0.38, green: 0.78, blue: 0.5)
++    static let enemyRed = Color(red: 0.86, green: 0.35, blue: 0.35)
++    static let mistWhite = Color(red: 0.92, green: 0.9, blue: 0.86)
++}
+diff --git a/ContentView.swift b/ContentView.swift
+new file mode 100644
+index 0000000..b13d2fa
+--- /dev/null
++++ b/ContentView.swift
+@@ -0,0 +1,185 @@
++import SwiftUI
++
++struct RootView: View {
++    var body: some View {
++        TabView {
++            BattleView()
++                .tabItem {
++                    Label("Battle", systemImage: "shield.lefthalf.filled")
++                }
++
++            UpgradesView()
++                .tabItem {
++                    Label("Upgrades", systemImage: "wand.and.stars")
++                }
++        }
++        .accentColor(.accentGold)
++    }
++}
++
++struct BattleView: View {
++    @EnvironmentObject private var gameState: GameState
++
++    var body: some View {
++        ZStack {
++            LinearGradient(
++                colors: [.nightSky, .duskPurple],
++                startPoint: .top,
++                endPoint: .bottom
++            )
++            .ignoresSafeArea()
++
++            VStack(spacing: 24) {
++                Text("Eldertide Clash")
++                    .font(.system(.largeTitle, design: .serif))
++                    .foregroundColor(.accentGold)
++
++                VStack(spacing: 16) {
++                    CharacterCard(
++                        name: gameState.heroName,
++                        currentHP: gameState.heroHP,
++                        maxHP: gameState.heroMaxHP,
++                        tint: .heroGreen,
++                        icon: "person.fill"
++                    )
++
++                    CharacterCard(
++                        name: gameState.enemyName,
++                        currentHP: gameState.enemyHP,
++                        maxHP: gameState.enemyMaxHP,
++                        tint: .enemyRed,
++                        icon: "flame.fill"
++                    )
++                }
++
++                VStack(alignment: .leading, spacing: 12) {
++                    Text("Battle Log")
++                        .font(.system(.headline, design: .serif))
++                        .foregroundColor(.accentGold)
++
++                    Text(gameState.battleLog)
++                        .font(.system(.body, design: .serif))
++                        .foregroundColor(.white)
++                        .padding(16)
++                        .frame(maxWidth: .infinity, alignment: .leading)
++                        .background(Color.black.opacity(0.35))
++                        .clipShape(RoundedRectangle(cornerRadius: 16))
++                }
++
++                Spacer()
++            }
++            .padding(24)
++        }
++    }
++}
++
++struct UpgradesView: View {
++    @EnvironmentObject private var gameState: GameState
++
++    var body: some View {
++        ZStack {
++            LinearGradient(
++                colors: [.nightSky, .deepForest],
++                startPoint: .top,
++                endPoint: .bottom
++            )
++            .ignoresSafeArea()
++
++            VStack(spacing: 24) {
++                Text("Upgrades")
++                    .font(.system(.largeTitle, design: .serif))
++                    .foregroundColor(.accentGold)
++
++                UpgradeStatView(title: "Attack", value: gameState.attack, systemImage: "bolt.fill") {
++                    gameState.increaseAttack()
++                }
++
++                UpgradeStatView(title: "Defense", value: gameState.defense, systemImage: "shield.fill") {
++                    gameState.increaseDefense()
++                }
++
++                Spacer()
++            }
++            .padding(24)
++        }
++    }
++}
++
++private struct CharacterCard: View {
++    let name: String
++    let currentHP: Double
++    let maxHP: Double
++    let tint: Color
++    let icon: String
++
++    var body: some View {
++        VStack(alignment: .leading, spacing: 12) {
++            HStack {
++                Image(systemName: icon)
++                    .foregroundColor(tint)
++                    .font(.title2)
++
++                Text(name)
++                    .font(.system(.title3, design: .serif))
++                    .foregroundColor(.white)
++
++                Spacer()
++
++                Text("\(Int(currentHP))/\(Int(maxHP)) HP")
++                    .font(.system(.subheadline, design: .serif))
++                    .foregroundColor(.mistWhite)
++            }
++
++            ProgressView(value: currentHP, total: maxHP)
++                .tint(tint)
++                .scaleEffect(x: 1, y: 1.5, anchor: .center)
++        }
++        .padding(16)
++        .background(Color.black.opacity(0.35))
++        .clipShape(RoundedRectangle(cornerRadius: 16))
++    }
++}
++
++private struct UpgradeStatView: View {
++    let title: String
++    let value: Int
++    let systemImage: String
++    let action: () -> Void
++
++    var body: some View {
++        VStack(spacing: 16) {
++            HStack {
++                Image(systemName: systemImage)
++                    .foregroundColor(.accentGold)
++
++                Text(title)
++                    .font(.system(.title2, design: .serif))
++                    .foregroundColor(.white)
++
++                Spacer()
++
++                Text("\(value)")
++                    .font(.system(.title2, design: .serif))
++                    .foregroundColor(.mistWhite)
++            }
++
++            Button(action: action) {
++                Text("Increase \(title)")
++                    .font(.system(.headline, design: .serif))
++                    .foregroundColor(.black)
++                    .padding(.vertical, 12)
++                    .frame(maxWidth: .infinity)
++                    .background(Color.accentGold)
++                    .clipShape(RoundedRectangle(cornerRadius: 12))
++            }
++        }
++        .padding(20)
++        .background(Color.black.opacity(0.35))
++        .clipShape(RoundedRectangle(cornerRadius: 18))
++    }
++}
++
++#Preview {
++    RootView()
++        .environmentObject(GameState())
++}
+diff --git a/FirstProjectApp.swift b/FirstProjectApp.swift
+new file mode 100644
+index 0000000..ce1b282
+--- /dev/null
++++ b/FirstProjectApp.swift
+@@ -0,0 +1,13 @@
++import SwiftUI
++
++@main
++struct FirstProjectApp: App {
++    @StateObject private var gameState = GameState()
++
++    var body: some Scene {
++        WindowGroup {
++            RootView()
++                .environmentObject(gameState)
++        }
++    }
++}
+diff --git a/GameState.swift b/GameState.swift
+new file mode 100644
+index 0000000..ec0037f
+--- /dev/null
++++ b/GameState.swift
+@@ -0,0 +1,24 @@
++import SwiftUI
++
++final class GameState: ObservableObject {
++    @Published var heroName = "Aria the Bold"
++    @Published var enemyName = "Gloomfang"
++    @Published var heroHP: Double = 74
++    @Published var heroMaxHP: Double = 100
++    @Published var enemyHP: Double = 46
++    @Published var enemyMaxHP: Double = 80
++    @Published var battleLog = "Aria raises her blade, the cavern glows with runes."
++
++    @Published var attack: Int = 12
++    @Published var defense: Int = 8
++
++    func increaseAttack() {
++        attack += 1
++        battleLog = "Aria sharpens her edge. Attack rises to \(attack)."
++    }
++
++    func increaseDefense() {
++        defense += 1
++        battleLog = "Aria fortifies her stance. Defense rises to \(defense)."
++    }
++}
+-- 
+2.43.0
