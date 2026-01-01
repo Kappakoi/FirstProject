@@ -1,0 +1,175 @@
+From defdd3c94c143e0fca53deaf0c96e4e753075d5c Mon Sep 17 00:00:00 2001
+From: Codex <codex@openai.com>
+Date: Thu, 1 Jan 2026 13:21:18 +0000
+Subject: [PATCH] Fix hero stat scaling and centralize persistence keys
+
+### Motivation
+- Prevent compounded stat increases when leveling by separating base stats from derived current stats.
+- Make persistence more robust by centralizing `UserDefaults` keys used for game state and last-active timestamp.
+- Keep the existing offline simulation and progression behavior intact while fixing data model and persistence bugs.
+
+### Description
+- Introduce `HeroBaseStats`, `HeroStats`, and a computed `HeroProgress.currentStats` so scaling is derived from base values rather than mutating scaled values.
+- Replace in-place stat scaling in `levelUp()` with a simple level increment and rely on `currentStats` for derived values.
+- Centralize persistence keys as `private static let storageKey` and `private static let lastActiveKey` and update all `UserDefaults` accesses to use them.
+- Ensure `saveState()` and `loadState(from:)` consistently use the centralized keys and keep `simulateOfflineProgress(now:)` and related parameters unchanged.
+
+### Testing
+- No automated tests were run for these changes.
+---
+ Package.swift            |  13 +++++
+ Sources/GameEngine.swift | 123 +++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 136 insertions(+)
+ create mode 100644 Package.swift
+ create mode 100644 Sources/GameEngine.swift
+
+diff --git a/Package.swift b/Package.swift
+new file mode 100644
+index 0000000..de60442
+--- /dev/null
++++ b/Package.swift
+@@ -0,0 +1,13 @@
++// swift-tools-version: 5.9
++import PackageDescription
++
++let package = Package(
++    name: "FirstProject",
++    platforms: [.iOS(.v16), .macOS(.v13)],
++    products: [
++        .library(name: "FirstProject", targets: ["FirstProject"])
++    ],
++    targets: [
++        .target(name: "FirstProject", path: "Sources")
++    ]
++)
+diff --git a/Sources/GameEngine.swift b/Sources/GameEngine.swift
+new file mode 100644
+index 0000000..d9883df
+--- /dev/null
++++ b/Sources/GameEngine.swift
+@@ -0,0 +1,123 @@
++import Foundation
++
++public struct HeroBaseStats: Codable, Equatable {
++    public var attack: Int
++    public var defense: Int
++    public var health: Int
++
++    public func scaled(for level: Int) -> HeroStats {
++        HeroStats(
++            attack: attack + (level - 1) * 2,
++            defense: defense + (level - 1),
++            health: health + (level - 1) * 5
++        )
++    }
++}
++
++public struct HeroStats: Codable, Equatable {
++    public var attack: Int
++    public var defense: Int
++    public var health: Int
++}
++
++public struct HeroProgress: Codable, Equatable {
++    public var level: Int
++    public var experience: Int
++    public var gold: Int
++    public var baseStats: HeroBaseStats
++
++    public var currentStats: HeroStats {
++        baseStats.scaled(for: level)
++    }
++
++    public static let starter = HeroProgress(
++        level: 1,
++        experience: 0,
++        gold: 0,
++        baseStats: HeroBaseStats(attack: 10, defense: 5, health: 100)
++    )
++}
++
++public struct GameState: Codable, Equatable {
++    public var hero: HeroProgress
++    public var lastActiveAt: Date
++
++    public static let fresh = GameState(hero: .starter, lastActiveAt: Date())
++}
++
++public final class GameEngine {
++    public static let shared = GameEngine()
++
++    private static let storageKey = "FirstProject.GameState"
++    private static let lastActiveKey = "FirstProject.LastActiveAt"
++    private let userDefaults: UserDefaults
++
++    public var state: GameState
++
++    public let battleInterval: TimeInterval = 15
++    public let experiencePerBattle: Int = 6
++    public let goldPerBattle: Int = 4
++    public let maxOfflineDuration: TimeInterval = 8 * 60 * 60
++
++    public init(userDefaults: UserDefaults = .standard) {
++        self.userDefaults = userDefaults
++        self.state = Self.loadState(from: userDefaults) ?? .fresh
++        if let lastActive = userDefaults.object(forKey: Self.lastActiveKey) as? Date {
++            self.state.lastActiveAt = lastActive
++        }
++    }
++
++    public func handleAppLaunch(now: Date = Date()) {
++        simulateOfflineProgress(now: now)
++        updateLastActive(now: now)
++    }
++
++    public func updateLastActive(now: Date = Date()) {
++        state.lastActiveAt = now
++        userDefaults.set(now, forKey: Self.lastActiveKey)
++        saveState()
++    }
++
++    public func simulateOfflineProgress(now: Date = Date()) {
++        let elapsed = max(0, now.timeIntervalSince(state.lastActiveAt))
++        let cappedElapsed = min(elapsed, maxOfflineDuration)
++        let battleCount = Int(floor(cappedElapsed / battleInterval))
++        guard battleCount > 0 else {
++            return
++        }
++
++        let totalExperience = battleCount * experiencePerBattle
++        let totalGold = battleCount * goldPerBattle
++
++        state.hero.gold += totalGold
++        applyExperience(totalExperience)
++        saveState()
++    }
++
++    private func applyExperience(_ amount: Int) {
++        guard amount > 0 else { return }
++
++        state.hero.experience += amount
++        while state.hero.experience >= experienceNeeded(for: state.hero.level + 1) {
++            levelUp()
++        }
++    }
++
++    private func levelUp() {
++        state.hero.level += 1
++    }
++
++    private func experienceNeeded(for level: Int) -> Int {
++        20 + (level - 1) * 10
++    }
++
++    private func saveState() {
++        guard let data = try? JSONEncoder().encode(state) else { return }
++        userDefaults.set(data, forKey: Self.storageKey)
++    }
++
++    private static func loadState(from defaults: UserDefaults) -> GameState? {
++        guard let data = defaults.data(forKey: Self.storageKey) else { return nil }
++        return try? JSONDecoder().decode(GameState.self, from: data)
++    }
++}
+-- 
+2.43.0
