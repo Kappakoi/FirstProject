@@ -1,0 +1,191 @@
+From 449f22a477dbe92c9902a3a70018541eb4bd55d4 Mon Sep 17 00:00:00 2001
+From: Codex <codex@openai.com>
+Date: Thu, 1 Jan 2026 13:34:43 +0000
+Subject: [PATCH] Add GameState model and persistence with lifecycle saving
+
+### Motivation
+- Persist hero stats, currency, and current stage so the app can restore play state across launches.
+- Provide a resilient serialization layer that prefers disk storage and falls back to `UserDefaults`.
+- Ensure the state is loaded on app startup and saved when the app goes to background, becomes inactive, or is terminated.
+- Make the state available to the UI via an observable store for simple display and future updates.
+
+### Description
+- Added `GameState.swift` with `HeroStats` and `GameState` as `Codable` types and a `GameState.default` initializer.
+- Implemented `GameStateStorage.swift` to `encode`/`decode` JSON, write/read `GameState.json` in the app Documents directory, and use `UserDefaults` (`GameState`) as a fallback.
+- Added `GameStateStore.swift` as an `ObservableObject` that loads initial state and exposes a `save()` method.
+- Wired lifecycle save/load in `FirstProjectApp.swift` by injecting the `GameStateStore` into `ContentView`, observing `scenePhase`, and subscribing to `UIApplication.willTerminateNotification`, and added `ContentView.swift` to display current values.
+
+### Testing
+- No automated tests were run.
+---
+ ContentView.swift      | 22 +++++++++++++++++++
+ FirstProjectApp.swift  | 23 ++++++++++++++++++++
+ GameState.swift        | 19 +++++++++++++++++
+ GameStateStorage.swift | 49 ++++++++++++++++++++++++++++++++++++++++
+ GameStateStore.swift   | 14 ++++++++++++
+ 5 files changed, 127 insertions(+)
+ create mode 100644 ContentView.swift
+ create mode 100644 FirstProjectApp.swift
+ create mode 100644 GameState.swift
+ create mode 100644 GameStateStorage.swift
+ create mode 100644 GameStateStore.swift
+
+diff --git a/ContentView.swift b/ContentView.swift
+new file mode 100644
+index 0000000..82ab216
+--- /dev/null
++++ b/ContentView.swift
+@@ -0,0 +1,22 @@
++import SwiftUI
++
++struct ContentView: View {
++    @EnvironmentObject private var store: GameStateStore
++
++    var body: some View {
++        VStack(spacing: 16) {
++            Text("Stage \(store.state.currentStage)")
++                .font(.title)
++            Text("HP \(store.state.heroStats.health)")
++            Text("Attack \(store.state.heroStats.attack)")
++            Text("Defense \(store.state.heroStats.defense)")
++            Text("Gold \(store.state.currency)")
++        }
++        .padding()
++    }
++}
++
++#Preview {
++    ContentView()
++        .environmentObject(GameStateStore())
++}
+diff --git a/FirstProjectApp.swift b/FirstProjectApp.swift
+new file mode 100644
+index 0000000..379dd78
+--- /dev/null
++++ b/FirstProjectApp.swift
+@@ -0,0 +1,23 @@
++import SwiftUI
++import UIKit
++
++@main
++struct FirstProjectApp: App {
++    @Environment(\.scenePhase) private var scenePhase
++    @StateObject private var store = GameStateStore()
++
++    var body: some Scene {
++        WindowGroup {
++            ContentView()
++                .environmentObject(store)
++                .onReceive(NotificationCenter.default.publisher(for: UIApplication.willTerminateNotification)) { _ in
++                    store.save()
++                }
++        }
++        .onChange(of: scenePhase) { newPhase in
++            if newPhase == .background || newPhase == .inactive {
++                store.save()
++            }
++        }
++    }
++}
+diff --git a/GameState.swift b/GameState.swift
+new file mode 100644
+index 0000000..daf4568
+--- /dev/null
++++ b/GameState.swift
+@@ -0,0 +1,19 @@
++import Foundation
++
++struct HeroStats: Codable, Equatable {
++    var health: Int
++    var attack: Int
++    var defense: Int
++}
++
++struct GameState: Codable, Equatable {
++    var heroStats: HeroStats
++    var currency: Int
++    var currentStage: Int
++
++    static let `default` = GameState(
++        heroStats: HeroStats(health: 100, attack: 10, defense: 5),
++        currency: 0,
++        currentStage: 1
++    )
++}
+diff --git a/GameStateStorage.swift b/GameStateStorage.swift
+new file mode 100644
+index 0000000..8bb7bd9
+--- /dev/null
++++ b/GameStateStorage.swift
+@@ -0,0 +1,49 @@
++import Foundation
++
++struct GameStateStorage {
++    private let fileName = "GameState.json"
++    private let userDefaultsKey = "GameState"
++
++    func load() -> GameState? {
++        if let fileData = readFromDisk(),
++           let state = try? JSONDecoder().decode(GameState.self, from: fileData) {
++            return state
++        }
++
++        if let defaultsData = UserDefaults.standard.data(forKey: userDefaultsKey),
++           let state = try? JSONDecoder().decode(GameState.self, from: defaultsData) {
++            return state
++        }
++
++        return nil
++    }
++
++    func save(_ state: GameState) {
++        guard let data = try? JSONEncoder().encode(state) else {
++            return
++        }
++
++        writeToDisk(data)
++        UserDefaults.standard.set(data, forKey: userDefaultsKey)
++    }
++
++    private func readFromDisk() -> Data? {
++        guard let url = fileURL() else {
++            return nil
++        }
++
++        return try? Data(contentsOf: url)
++    }
++
++    private func writeToDisk(_ data: Data) {
++        guard let url = fileURL() else {
++            return
++        }
++
++        try? data.write(to: url, options: .atomic)
++    }
++
++    private func fileURL() -> URL? {
++        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?.appendingPathComponent(fileName)
++    }
++}
+diff --git a/GameStateStore.swift b/GameStateStore.swift
+new file mode 100644
+index 0000000..a6201c7
+--- /dev/null
++++ b/GameStateStore.swift
+@@ -0,0 +1,14 @@
++import SwiftUI
++
++final class GameStateStore: ObservableObject {
++    @Published var state: GameState
++    private let storage = GameStateStorage()
++
++    init() {
++        state = storage.load() ?? .default
++    }
++
++    func save() {
++        storage.save(state)
++    }
++}
+-- 
+2.43.0
